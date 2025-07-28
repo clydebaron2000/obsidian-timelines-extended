@@ -11,6 +11,7 @@ import {
 } from '../types'
 import { findMatchingFrontMatterKey } from './frontmatter'
 import { logger } from './debug'
+import { validateTimelineType } from './dates'
 
 // todo: figure out more deterministic way of checking whether an object is of type FrontMatterCache
 export const isFrontMatterCacheType = ( value: unknown ): value is FrontMatterCache => {
@@ -158,7 +159,7 @@ export const getEventData = (
   )
   const pointsTo       = retrieveEventValue( eventObject, 'pointsTo', '' )
   const tags           = retrieveEventValue( eventObject, 'tags', '' ) ?? ''
-  const type           = retrieveEventValue( eventObject, 'type', 'box' )
+  const type           = validateTimelineType( retrieveEventValue( eventObject, 'type', 'box' ))
   const showOnTimeline = retrieveEventValue( eventObject, 'showOnTimeline', 'false' )
 
   const eventData: EventDataObject = {

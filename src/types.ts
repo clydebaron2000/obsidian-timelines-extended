@@ -131,6 +131,14 @@ export interface ParsedTagObject {
   optionalTags: string[],
 }
 
+export interface DateParsingConfig {
+  yearLength: number,
+  monthLength: number,
+  dayLength: number,
+  hourLength: number,
+  minuteLength: number,
+}
+
 export interface TimelinesSettings {
   eventElement: AcceptableEventElements,
   frontMatterKeys: FrontMatterKeys,
@@ -140,6 +148,7 @@ export interface TimelinesSettings {
   timelineTag: string,
   maxDigits: string,
   verticalTimelineDateDisplayFormat: string,
+  dateParsingConfig: DateParsingConfig,
 }
 
 /* ------------------------------ */

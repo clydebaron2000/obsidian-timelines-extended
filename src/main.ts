@@ -5,7 +5,9 @@ import { DEFAULT_SETTINGS } from './constants'
 import { Plugin, MarkdownView } from 'obsidian'
 import { TimelinesSettingTab } from './settings'
 import { TimelineCommandProcessor } from './commands'
-import { logger } from './utils'
+import { logger, setupTimelineDebugger } from './utils'
+import { runTimelineTests } from './utils/timeline-tests'
+import { checkTimelineHealth } from './utils/timeline-health'
 
 export default class TimelinesPlugin extends Plugin {
   pluginName: string = this.manifest.name
@@ -19,6 +21,28 @@ export default class TimelinesPlugin extends Plugin {
 
     const loaded = await this.loadData()
     this.settings = { ...DEFAULT_SETTINGS, ...loaded }
+    
+    // Migrate from old regex-based system to new simplified system
+    if ( 'dateParsingRegex' in this.settings && !this.settings.dateParsingConfig ) {
+      console.log( 'Migrating timeline settings from regex-based to simplified date parsing' )
+      
+      // Set default config for migration
+      this.settings.dateParsingConfig = {
+        yearLength: 4,
+        monthLength: 2,
+        dayLength: 2,
+        hourLength: 2,
+        minuteLength: 2,
+      }
+      
+      // Remove old properties
+      delete (this.settings as any).dateParsingRegex
+      delete (this.settings as any).dateParsingFormat
+      
+      // Save migrated settings
+      await this.saveData( this.settings )
+    }
+    
     this.blocks = new TimelineBlockProcessor( this.settings, this.app.metadataCache, this.app.vault )
     this.commands = new TimelineCommandProcessor( this, this.blocks.run.bind( this.blocks ))
   }
@@ -26,6 +50,9 @@ export default class TimelinesPlugin extends Plugin {
   onload = async () => {
     await this.initialize()
     console.log( `Loaded Plugin: ${this.pluginName}` )
+
+    // Setup debugging helper
+    setupTimelineDebugger()
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     this.registerMarkdownCodeBlockProcessor( 'ob-timeline', async ( source, el, ctx ) => {
@@ -92,6 +119,33 @@ export default class TimelinesPlugin extends Plugin {
           return true
         }
       },
+    })
+
+    // Timeline testing and debugging commands
+    this.addCommand({
+      id: 'test-timeline-system',
+      name: 'Test Timeline System',
+      callback: async () => {
+        await runTimelineTests(this.settings.dateParsingConfig)
+      }
+    })
+
+    this.addCommand({
+      id: 'check-timeline-health',
+      name: 'Check Timeline Health',
+      callback: () => {
+        checkTimelineHealth()
+      }
+    })
+
+    this.addCommand({
+      id: 'debug-timeline-data',
+      name: 'Debug Timeline Data',
+      callback: () => {
+        if (typeof window !== 'undefined') {
+          ;(window as any).debugTimeline()
+        }
+      }
     })
 
     this.addSettingTab( new TimelinesSettingTab( this.app, this ))

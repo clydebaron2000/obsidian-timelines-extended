@@ -1,6 +1,6 @@
 import { isNaN } from 'lodash'
 
-import { buildTimelineDate } from './dates'
+import { parseSimplifiedDate, buildTimelineDate } from './dates'
 import { logger } from './debug'
 import { InternalTimelineArgs, ParsedTagObject, TimelinesSettings } from '../types'
 import { DEFAULT_SETTINGS } from '../constants'
@@ -17,6 +17,32 @@ export function setDefaultArgs( settings: TimelinesSettings ): InternalTimelineA
     useNewDefaultFormat = true
   }
 
+  // Create default dates using reasonable ranges to prevent infinite loop issues
+  // Use current year +/- reasonable ranges instead of extreme values
+  const currentYear = new Date().getFullYear()
+  const startYear = Math.max( 1900, currentYear - 50 ) // 50 years ago or 1900, whichever is later
+  const endYear = currentYear + 50 // 50 years in the future
+  const minYear = Math.max( 1800, currentYear - 100 ) // 100 years ago or 1800, whichever is later  
+  const maxYear = currentYear + 100 // 100 years in the future
+
+  const startDateResult = parseSimplifiedDate( startYear.toString(), settings.dateParsingConfig, false, 'box' )
+  const endDateResult = parseSimplifiedDate( endYear.toString(), settings.dateParsingConfig, false, 'box' )
+  const minDateResult = parseSimplifiedDate( minYear.toString(), settings.dateParsingConfig, false, 'box' )
+  const maxDateResult = parseSimplifiedDate( maxYear.toString(), settings.dateParsingConfig, false, 'box' )
+
+  // Fallback to safe dates if parsing fails
+  const safeStartDate = buildTimelineDate( startDateResult ) || new Date( startYear, 0, 1 )
+  const safeEndDate = buildTimelineDate( endDateResult ) || new Date( endYear, 0, 1 )
+  const safeMinDate = buildTimelineDate( minDateResult ) || new Date( minYear, 0, 1 )
+  const safeMaxDate = buildTimelineDate( maxDateResult ) || new Date( maxYear, 0, 1 )
+
+  logger( 'setDefaultArgs | Created default dates', {
+    startDate: safeStartDate,
+    endDate: safeEndDate,
+    minDate: safeMinDate,
+    maxDate: safeMaxDate
+  })
+
   return {
     tags: {
       tagList: [],
@@ -24,10 +50,10 @@ export function setDefaultArgs( settings: TimelinesSettings ): InternalTimelineA
     },
     dateFormat: useNewDefaultFormat ? dateFormatFromSettings : defaultVerticalDateFormat,
     divHeight: 400,
-    startDate: buildTimelineDate( '-1000' )!,
-    endDate: buildTimelineDate( '3000' )!,
-    minDate: buildTimelineDate( '-3000' )!,
-    maxDate: buildTimelineDate( '3000' )!,
+    startDate: safeStartDate,
+    endDate: safeEndDate,
+    minDate: safeMinDate,
+    maxDate: safeMaxDate,
     type: null,
 
     // have to put it to one more than the default max so that min actually works

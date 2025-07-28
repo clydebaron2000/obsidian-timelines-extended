@@ -2,29 +2,200 @@ import { DateTime as LuxonDateTime } from 'luxon'
 
 import { logger } from './debug'
 import { DEFAULT_SETTINGS } from '../constants'
-import { CleanedDateResultObject } from '../types'
+import { CleanedDateResultObject, DateParsingConfig } from '../types'
+
+/**
+ * Parse a date string using configurable character lengths
+ * 
+ * @param {string} dateString - the raw date string to parse
+ * @param {DateParsingConfig} config - parsing configuration
+ * @param {boolean} isEndDate - whether this is an end date (for auto-generation)
+ * @param {string} eventType - event type ('point' events don't get end dates)
+ * 
+ * @returns {CleanedDateResultObject | null}
+ */
+export const parseSimplifiedDate = (
+  dateString: string,
+  config: DateParsingConfig,
+  isEndDate: boolean = false,
+  eventType: string = 'box'
+): CleanedDateResultObject | null => {
+  if ( !dateString || typeof dateString !== 'string' ) {
+    logger( 'parseSimplifiedDate | Invalid input', { dateString, config, isEndDate, eventType })
+    return null
+  }
+
+  logger( 'parseSimplifiedDate | parsing', { dateString, config, isEndDate, eventType })
+
+  // Remove any non-digit characters and parse sequentially
+  const cleanString = dateString.replace( /\D/g, '' )
+  let position = 0
+
+  // Parse year
+  const yearStr = cleanString.substring( position, position + config.yearLength )
+  if ( !yearStr ) {
+    logger( 'parseSimplifiedDate | no year found' )
+    return null
+  }
+  position += config.yearLength
+
+  // Parse month (optional)
+  const monthStr = cleanString.substring( position, position + config.monthLength )
+  position += config.monthLength
+
+  // Parse day (optional)
+  const dayStr = cleanString.substring( position, position + config.dayLength )
+  position += config.dayLength
+
+  // Parse hour (optional)
+  const hourStr = cleanString.substring( position, position + config.hourLength )
+  position += config.hourLength
+
+  // Parse minute (optional)
+  const minuteStr = cleanString.substring( position, position + config.minuteLength )
+
+  // Convert to numbers
+  const year = parseInt( yearStr ) || 0
+  let month = parseInt( monthStr ) || 0
+  let day = parseInt( dayStr ) || 0
+  let hour = parseInt( hourStr ) || 0
+  let minute = parseInt( minuteStr ) || 0
+
+  // Validate year
+  if ( year === 0 ) {
+    logger( 'parseSimplifiedDate | Invalid year', { yearStr, year })
+    return null
+  }
+
+  logger( 'parseSimplifiedDate | parsed components', { year, month, day, hour, minute, monthStr, dayStr, hourStr, minuteStr })
+
+  // For end dates, round up to next unit if this is auto-generated
+  if ( isEndDate && eventType !== 'point' && !monthStr && !dayStr && !hourStr && !minuteStr ) {
+    // Only auto-generate if no end date components were provided
+    logger( 'parseSimplifiedDate | auto-generating end date' )
+    return createDateResult( year + 1, 1, 1, 0, 0, dateString )
+  }
+
+  // For start dates or point events, use defaults for missing components
+  if ( !month ) month = 1
+  if ( !day ) day = 1
+  // hour and minute can remain 0
+
+  const result = createDateResult( year, month, day, hour, minute, dateString )
+  logger( 'parseSimplifiedDate | final result', result )
+  return result
+}
+
+/**
+ * Create a CleanedDateResultObject from parsed components
+ */
+const createDateResult = (
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  originalDateString: string
+): CleanedDateResultObject => {
+  // Convert minute to decimal hour for compatibility with existing structure
+  const hourWithMinutes = hour + (minute / 60)
+  
+  // Create normalized date string (YYYY-MM-DD-HH format for compatibility)
+  const normalizedDateString = `${year.toString().padStart( 4, '0' )}-${month.toString().padStart( 2, '0' )}-${day.toString().padStart( 2, '0' )}-${hour.toString().padStart( 2, '0' )}`
+  
+  // Create cleaned date string (same as normalized for now)
+  const cleanedDateString = normalizedDateString
+  
+  // Create readable date string (minimize unnecessary components)
+  let readableParts = [year.toString()]
+  if ( month > 1 || day > 1 || hour > 0 || minute > 0 ) {
+    readableParts.push( month.toString().padStart( 2, '0' ))
+  }
+  if ( day > 1 || hour > 0 || minute > 0 ) {
+    readableParts.push( day.toString().padStart( 2, '0' ))
+  }
+  if ( hour > 0 || minute > 0 ) {
+    readableParts.push( hour.toString().padStart( 2, '0' ))
+  }
+  const readableDateString = readableParts.join( '-' )
+
+  const result: CleanedDateResultObject = {
+    cleanedDateString,
+    normalizedDateString,
+    originalDateString,
+    readableDateString,
+    year,
+    month: month - 1, // JavaScript Date months are 0-indexed
+    day,
+    hour: Math.floor( hourWithMinutes ) // Use the hour component, ignoring minutes for now
+  }
+
+  logger( 'createDateResult | created', result )
+  return result
+}
+
+/**
+ * Validate and normalize timeline item type
+ * 
+ * @param {string} type - the type to validate
+ * @returns {string} - a valid vis-timeline type
+ */
+export const validateTimelineType = ( type: string | undefined | null ): string => {
+  const validTypes = ['box', 'point', 'range', 'background']
+  
+  // Handle undefined/null/empty values
+  if ( !type || typeof type !== 'string' ) {
+    logger( 'validateTimelineType | Invalid type, defaulting to box', { originalType: type })
+    return 'box'
+  }
+  
+  // Normalize the type by removing any 'vis-' prefix
+  const normalizedType = type.replace(/^vis-/, '')
+  
+  // Check if it's a valid type
+  if ( validTypes.includes( normalizedType )) {
+    return normalizedType
+  }
+  
+  // If type is 'event' or any other invalid type, default to 'box'
+  logger( 'validateTimelineType | Invalid type, defaulting to box', { originalType: type, normalizedType })
+  return 'box'
+}
 
 /**
  * Create a Datetime Object for sorting or for use as an argument to the vis-timeline constructor
  *
- * @param {string} rawDate - string from of date in format "YYYY-MM-DD-HH"
+ * @param {CleanedDateResultObject} dateResult - parsed date result
  *
  * @returns {Date | null}
  */
-export const buildTimelineDate = (
-  rawDate: string | null,
-  maxDigits?: number
-): Date | null => {
-  if ( !rawDate ) {
+export const buildTimelineDate = ( dateResult: CleanedDateResultObject | null ): Date | null => {
+  if ( !dateResult ) {
     return null
   }
 
-  const normalizedAndCleanedDateObject = cleanDate( rawDate, maxDigits )
-  if ( !normalizedAndCleanedDateObject ) {
+  const { year, month, day, hour } = dateResult
+
+  // Validate date components
+  if ( year === 0 || isNaN( year )) {
+    logger( 'buildTimelineDate | Invalid year', { year, dateResult })
     return null
   }
-
-  const { cleanedDateString, year, month, day, hour, normalizedDateString } = normalizedAndCleanedDateObject
+  
+  if ( month < 0 || month > 11 || isNaN( month )) {
+    logger( 'buildTimelineDate | Invalid month', { month, dateResult })
+    return null
+  }
+  
+  if ( day < 1 || day > 31 || isNaN( day )) {
+    logger( 'buildTimelineDate | Invalid day', { day, dateResult })
+    return null
+  }
+  
+  if ( hour < 0 || hour > 23 || isNaN( hour )) {
+    logger( 'buildTimelineDate | Invalid hour', { hour, dateResult })
+    return null
+  }
 
   // native JS Date handles negative years and recent dates pretty decent
   // so if year is negative, or if the year is recent (past 1900)
@@ -32,27 +203,32 @@ export const buildTimelineDate = (
   let returnDate: Date
   let luxonDateTime: LuxonDateTime | null = null
   let luxonDateString: string | null = null
+  
   if ( year < 0 || year > 1900 ) {
     returnDate = new Date( year, month, day, hour )
   } else {
     // but if date is positive, well, then we need to make sure we're actually getting
     // the date that we want. JS Date will change "0001-00-01" to "Jan 1st 1970"
-    luxonDateTime = LuxonDateTime.fromFormat( cleanedDateString, 'y-M-d-H' )
-    luxonDateString = luxonDateTime.toISO()
+    luxonDateString = `${year.toString().padStart( 4, '0' )}-${(month + 1).toString().padStart( 2, '0' )}-${day.toString().padStart( 2, '0' )}-${hour.toString().padStart( 2, '0' )}`
+    luxonDateTime = LuxonDateTime.fromFormat( luxonDateString, 'y-M-d-H' )
+    const luxonISOString = luxonDateTime.toISO()
 
-    if ( !luxonDateString ) {
+    if ( !luxonISOString ) {
       console.error( "buildTimelineDate | Couldn't create a luxon date string!" )
       return null
     }
 
-    returnDate = new Date( luxonDateString )
+    returnDate = new Date( luxonISOString )
+  }
+
+  // Validate the final date object
+  if ( isNaN( returnDate.getTime())) {
+    logger( 'buildTimelineDate | Created invalid date', { dateResult, returnDate })
+    return null
   }
 
   logger( 'buildTimelineDate | date variables', {
-    rawDate,
-    cleanedDateString,
-    normalizedAndCleanedDateObject,
-    normalizedDateString,
+    dateResult,
     luxonDateTime,
     luxonDateString,
     returnDate
@@ -61,185 +237,8 @@ export const buildTimelineDate = (
   return returnDate
 }
 
-const buildNumPartsArray = ( dateString: string, isNegative: boolean ): number[] => {
-  const parts = isNegative ? dateString.slice( 1 ).split( '-' ) : dateString.toString().split( '-' )
-  const numParts: number[] = parts.map(( part ) => {
-    return parseInt( part, 10 )
-  })
-
-  return numParts
-}
-
 /**
- * Take a raw date, normalize it, and clean it of leading zeros, the return all the various
- * parts needed for buildTimelineDate
- * 
- * @param {string} rawDate
- * @param {number | undefined} maxDigits
- * 
- * @returns {CleanedDateResultObject}
- */
-export const cleanDate = (
-  rawDate: string,
-  maxDigits: number = parseInt( DEFAULT_SETTINGS.maxDigits ),
-  formatString: string = DEFAULT_SETTINGS.verticalTimelineDateDisplayFormat
-): CleanedDateResultObject | null => {
-  logger( 'cleanDate | rawDate:', { rawDate, formatString })
-  const normalizedDateString = normalizeDate( rawDate, maxDigits )
-  if ( normalizedDateString === null ) {
-    return null
-  }
-
-  const isNegative = normalizedDateString[0] === '-'
-  const normalizedParts = buildNumPartsArray( normalizedDateString, isNegative )
-  
-  const fullCleanedDateString = ( isNegative ? '-' : '' ) + normalizedParts.join( '-' )
-  let minimizedDateString = minimizeDateString( fullCleanedDateString )
-  let formattedDateString = formatDate( minimizedDateString, formatString )
-
-  const useUserFormattedString = formatString !== DEFAULT_SETTINGS.verticalTimelineDateDisplayFormat
-  if ( useUserFormattedString ) {
-    const originalParts = buildNumPartsArray( rawDate, isNegative )
-    const cleanedDateStringFromOriginalParts = ( isNegative ? '-' : '' ) + originalParts.join( '-' )
-
-    minimizedDateString = minimizeDateString( cleanedDateStringFromOriginalParts )
-    formattedDateString = formatDate( minimizedDateString, formatString )
-  }
-
-  const year  = normalizedParts[0] * ( isNegative ? -1 : 1 )
-  const month = ( normalizedParts[1] ?? 1 ) - ( normalizedParts[0] !== 0 ? 1 : 0 )
-  const day   = normalizedParts[2]
-  const hour  = normalizedParts[3] ?? 1
-
-  const resultObject: CleanedDateResultObject = {
-    cleanedDateString: fullCleanedDateString,
-    normalizedDateString,
-    originalDateString: rawDate,
-    readableDateString: useUserFormattedString ? formattedDateString : minimizedDateString,
-    year,
-    month,
-    day,
-    hour
-  }
-
-  logger( 'cleanDate | resultObject', {
-    ...resultObject,
-    formatString,
-    useUserFormattedString,
-    formattedDateString,
-    minimizedDateString,
-  })
-  
-  return resultObject
-}
-
-/** 
- * Take a date string and return a minimized version of it. Example: 2022-01-01-00 becomes 2022-01-01
- *
- * @param dateString
- * 
- * @returns {string}
- */
-const minimizeDateString = ( dateString: string ): string => {
-  const chars = Array.from( dateString )
-
-  let isNegative = false
-  if ( chars[0] === '-' ) {
-    isNegative = true
-  }
-
-  let sections: string[] = []
-  if ( isNegative ) {
-    sections = chars.slice( 1, chars.length ).join( '' ).split( '-' )
-  } else {
-    sections = chars.join( '' ).split( '-' )
-  }
-
-  if ( !sections.length ) {
-    throw new Error( 'could not get the different sections of the event date' )
-  }
-
-  logger( 'minimizeDateString | before', { sections })
-
-  // we always at least have the year
-  const remainingSections: string[] = [ (( isNegative ? '-' : '' ) + sections[0] ) ]
-  for ( let i = 1; i < 4; i++ ) {
-    // if whatever section we're looking at is invalid, skip
-    if ( [0, -1].includes( parseInt( sections[i] ))) {
-      continue
-    }
-
-    // if we're looking at hour but day is not set, skip
-    // todo: if hour is not set, but day is, don't show it
-    if ( i === 3 && parseInt( sections[i - 1] ) < 1 ) {
-      continue
-    }
-
-    if ( sections[i] ) {
-      remainingSections.push( sections[i] )
-    }
-  }
-
-  logger( 'minimizeDateString | remaining', { remainingSections })
-
-  return remainingSections.join( '-' )
-}
-
-/**
- * Takes a date string and normalizes it so there are always 4 sections, each the length specified by maxDigits
- * If there are missing sections, they will be inserted with a value of 01 (except for hours, which will be 00)
- *
- * @param date - a date string of some nebulous format
- * @param maxDigits - the number of digits to pad each section to
- *
- * @returns {string}
- */
-const normalizeDate = (
-  date: string | null,
-  maxDigits: number = parseInt( DEFAULT_SETTINGS.maxDigits )
-): string | null => {
-  if ( !date ) {
-    return null 
-  }
-
-  // todo: handle sections of arbitrary length
-  let isNegativeYear = false
-  if ( date[0] === '-' ) {
-    isNegativeYear = true
-    date = date.substring( 1 )
-  }
-
-  const sections = date.toString().split( '-' )
-
-  // cases:
-  // 4 sections: YYYY-MM-DD-HH (perfect, send it off as is)
-  // 3 sections: YYYY-MM-DD    (add 01 at the end)
-  // 2 sections: YYYY-MM       (add 01-01 at the end)
-  // 1 section:  YYYY          (add 01-01-01 at the end)
-
-  switch ( sections.length ) {
-  case 1:
-    sections.push( '01' ) // MM
-  case 2:
-    sections.push( '01' ) // DD
-  case 3:
-    sections.push( '01' ) // HH
-    break
-  }
-
-  const paddedSections = sections.map(( section ) => {
-    return section.padStart( maxDigits, '0' )
-  })
-
-  if ( isNegativeYear ) {
-    paddedSections[0] = `-${paddedSections[0]}`
-  }
-
-  return paddedSections.join( '-' )
-}
-
-/**
- * Correctly sort our timeline dates, taking heed of negative dates
+ * Sort timeline dates correctly, taking heed of negative dates
  *
  * @param {string[]} timelineDates the array of normalized noteId's (event start dates) for the timeline
  * @param {boolean} sortDirection false for descending, true for ascending
@@ -276,6 +275,7 @@ export const sortTimelineDates = ( timelineDates: string[], sortDirection: boole
   return sortedTimelineDates
 }
 
+// Keep the formatDate function for display formatting
 function mapMonthValueToName( month: string, abbreviate: boolean = false ): string {
   let name = month
   switch ( month ) {
@@ -438,17 +438,33 @@ export function formatDate( dateString: string, formatString: string ): string {
   cascadeDeleteBasedOnMissingPredecessor( dateParts )
   logger( 'formatDate | dateparts after cascade delete', dateParts )
 
-  // Validate that all tokens in formatString exist in dateParts
-  const requiredTokens = formatString.match( /\b(H|D{1,4}|M{1,3}|Y{2,4})\b/g ) || []
-  for ( const token of requiredTokens ) {
-    if ( !( token in dateParts )) {
-      throw new Error( `Invalid format: ${token} is missing in the date string.` )
-    }
+  // Create a clean format string based on available date parts
+  let cleanFormatString = formatString
+  
+  // If we don't have certain date parts, remove them from the format string
+  if ( !dateParts.H && !dateParts.HH ) {
+    cleanFormatString = cleanFormatString.replace( /\s*H{1,2}\s*/g, '' )
   }
+  if ( !dateParts.D && !dateParts.DD && !dateParts.DDD && !dateParts.DDDD ) {
+    cleanFormatString = cleanFormatString.replace( /\s*D{1,4}\s*/g, '' )
+  }
+  if ( !dateParts.M && !dateParts.MM && !dateParts.MMM ) {
+    cleanFormatString = cleanFormatString.replace( /\s*M{1,3}\s*/g, '' )
+  }
+  
+  // Clean up any double spaces or trailing/leading spaces
+  cleanFormatString = cleanFormatString.replace( /\s+/g, ' ' ).trim()
+  
+  logger( 'formatDate | cleaned format string', { original: formatString, cleaned: cleanFormatString })
 
-  // Replace each token in the format string by calling its associated function
-  return formatString.replace( /\b(H{1,2}|D{1,4}|M{1,3}|Y{2,4})\b/g, ( token ) => {
+  // Replace each token in the cleaned format string
+  return cleanFormatString.replace( /\b(H{1,2}|D{1,4}|M{1,3}|Y{2,4})\b/g, ( token ) => {
     logger( `formatDate | replacing token: ${token}` )
-    return dateParts[token] ?? '' // Replace with formatted part or empty string
+    const value = dateParts[token]
+    if ( value === undefined || value === null ) {
+      logger( `formatDate | token ${token} not available, using empty string` )
+      return ''
+    }
+    return value
   })
 }

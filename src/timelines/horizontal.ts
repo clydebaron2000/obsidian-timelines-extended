@@ -16,6 +16,7 @@ import {
   createInternalLinkOnNoteCard,
   handleColor,
   logger,
+  validateTimelineType,
 } from '../utils'
 
 /**
@@ -36,6 +37,21 @@ export async function buildHorizontalTimeline(
     settings,
   }: HorizontalTimelineInput
 ) {
+  logger( 'buildHorizontalTimeline | Starting horizontal timeline build', {
+    timelineNotesCount: Object.keys( timelineNotes ).length,
+    timelineDatesCount: timelineDates.length,
+    args: {
+      startDate: args.startDate,
+      endDate: args.endDate,
+      minDate: args.minDate,
+      maxDate: args.maxDate,
+      divHeight: args.divHeight,
+      zoomInLimit: args.zoomInLimit,
+      zoomOutLimit: args.zoomOutLimit
+    },
+    dateParsingConfig: settings.dateParsingConfig
+  })
+
   // Create a DataSet
   const items = new DataSet<CombinedTimelineEventData>( [] )
 
@@ -43,6 +59,10 @@ export async function buildHorizontalTimeline(
     logger( 'buildHorizontalTimeline | No dates found for the timeline' )
     return
   }
+
+  // Debug: Log the first few timeline notes to see their structure
+  const sampleNotes = Object.entries( timelineNotes ).slice( 0, 3 )
+  logger( 'buildHorizontalTimeline | Sample timeline notes', sampleNotes )
 
   const groups: MinimalGroup[] = [
     {
@@ -60,7 +80,7 @@ export async function buildHorizontalTimeline(
       noteCard.className = 'timeline-card ' + event.classes
       let colorIsClass = false
       let end: Date | null = null
-      let type: string = event.type
+      let type: string = validateTimelineType( event.type )
       let typeOverride = false
 
       // add an image only if available
@@ -78,7 +98,21 @@ export async function buildHorizontalTimeline(
       createInternalLinkOnNoteCard( event, noteCard )
       noteCard.createEl( 'p', { text: event.body })
       
-      const start = buildTimelineDate( event.startDate.normalizedDateString, parseInt( settings.maxDigits ))
+      logger( 'buildHorizontalTimeline | Processing event dates', {
+        eventId: event.id,
+        eventTitle: event.title,
+        startDate: event.startDate,
+        endDate: event.endDate,
+        eventType: event.type
+      })
+      
+      const start = buildTimelineDate( event.startDate )
+      logger( 'buildHorizontalTimeline | Built start date', { 
+        originalStartDate: event.startDate,
+        builtStartDate: start,
+        isValidDate: start ? !isNaN( start.getTime()) : false
+      })
+      
       if ( !start ) {
         console.warn(
           "buildHorizontalTimeline | Couldn't build the starting timeline date for the horizontal timeline",
@@ -90,11 +124,16 @@ export async function buildHorizontalTimeline(
 
       if ( event.endDate.normalizedDateString && event.endDate.normalizedDateString !== '' ) {
         logger( 'buildHorizontalTimeline | there is an endDate for event:', event )
-        end = buildTimelineDate( event.endDate.normalizedDateString, parseInt( settings.maxDigits ))
+        end = buildTimelineDate( event.endDate )
+        logger( 'buildHorizontalTimeline | Built end date', { 
+          originalEndDate: event.endDate,
+          builtEndDate: end,
+          isValidDate: end ? !isNaN( end.getTime()) : false
+        })
       } else {
         // if there is no end date, we cannot render as anything other than 'point'
         logger( 'buildHorizontalTimeline | NO endDate for event:', event )
-        type = 'point'
+        type = validateTimelineType( 'point' )
         typeOverride = true
       }
 
@@ -130,9 +169,53 @@ export async function buildHorizontalTimeline(
         group:     foundGroup?.id ?? defaultGroup.id,
         path:      event.path,
         start:     start,
-        type:      typeOverride ? type : event.type,
+        type:      validateTimelineType( typeOverride ? type : event.type ),
         _event:    event,
       }
+
+      // Validate the timeline item before adding it
+      if ( !start || isNaN( start.getTime()) || !isFinite( start.getTime())) {
+        logger( 'buildHorizontalTimeline | Invalid start date for event, skipping', { event, start })
+        return
+      }
+
+      if ( end && ( isNaN( end.getTime()) || !isFinite( end.getTime()))) {
+        logger( 'buildHorizontalTimeline | Invalid end date for event, removing end date', { event, end })
+        eventItem.end = undefined
+        end = null
+      }
+
+      // Ensure end date is after start date if both exist
+      if ( end && end <= start ) {
+        logger( 'buildHorizontalTimeline | End date is not after start date, removing end date', { event, start, end })
+        eventItem.end = undefined
+        end = null
+      }
+
+      // Additional validation for extreme dates
+      const currentYear = new Date().getFullYear()
+      const startYear = start.getFullYear()
+      if ( startYear < 1 || startYear > currentYear + 1000 ) {
+        logger( 'buildHorizontalTimeline | Start date year is extreme, skipping event', { event, startYear })
+        return
+      }
+
+      if ( end ) {
+        const endYear = end.getFullYear()
+        if ( endYear < 1 || endYear > currentYear + 1000 ) {
+          logger( 'buildHorizontalTimeline | End date year is extreme, removing end date', { event, endYear })
+          eventItem.end = undefined
+          end = null
+        }
+      }
+
+      logger( 'buildHorizontalTimeline | Final validated event item', {
+        id: eventItem.id,
+        start: eventItem.start,
+        end: eventItem.end,
+        type: eventItem.type,
+        content: eventItem.content
+      })
 
       const timelineItem: CombinedTimelineEventData = buildCombinedTimelineDataObject( eventItem )
 
@@ -180,13 +263,190 @@ export async function buildHorizontalTimeline(
     }
   }
 
+  // Validate timeline options dates to prevent infinite loop
+  const dateFields = ['start', 'end', 'min', 'max'] as const
+  for ( const field of dateFields ) {
+    const date = options[field]
+    if ( date && ( isNaN( date.getTime()) || !isFinite( date.getTime()))) {
+      logger( `buildHorizontalTimeline | Invalid ${field} date, using fallback`, { date, field })
+      // Use a safe fallback date
+      options[field] = field === 'start' || field === 'min' ? new Date( 2000, 0, 1 ) : new Date( 2030, 0, 1 )
+    }
+    
+    // Check for extreme dates that can cause issues
+    if ( date ) {
+      const year = date.getFullYear()
+      if ( year < 1900 || year > 2100 ) {
+        logger( `buildHorizontalTimeline | Extreme ${field} date year (${year}), using safe fallback`, { date, field, year })
+        // Use safe dates within reasonable range
+        if ( field === 'start' || field === 'min' ) {
+          options[field] = new Date( 2000, 0, 1 )
+        } else {
+          options[field] = new Date( 2030, 0, 1 )
+        }
+      }
+    }
+  }
+
+  // Ensure start is before end and min is before max
+  if ( options.start && options.end && options.start >= options.end ) {
+    logger( 'buildHorizontalTimeline | Start date is not before end date, adjusting' )
+    options.end = new Date( options.start.getTime() + 365 * 24 * 60 * 60 * 1000 ) // Add 1 year
+  }
+
+  if ( options.min && options.max && options.min >= options.max ) {
+    logger( 'buildHorizontalTimeline | Min date is not before max date, adjusting' )
+    // Fix the order - min should be before max
+    if ( options.min.getTime() >= options.max.getTime()) {
+      const tempMin = new Date( options.max.getTime() - 10 * 365 * 24 * 60 * 60 * 1000 ) // 10 years before max
+      options.min = tempMin
+    }
+  }
+  
+  // Additional safety check - ensure min/max span is reasonable
+  if ( options.min && options.max ) {
+    const timeDiff = options.max.getTime() - options.min.getTime()
+    const oneYear = 365 * 24 * 60 * 60 * 1000
+    
+    if ( timeDiff < oneYear ) {
+      logger( 'buildHorizontalTimeline | Min/max date range too small, expanding' )
+      options.min = new Date( options.max.getTime() - 10 * oneYear )
+    }
+    
+    if ( timeDiff > 100 * oneYear ) {
+      logger( 'buildHorizontalTimeline | Min/max date range too large, constraining' )
+      options.min = new Date( options.max.getTime() - 50 * oneYear )
+    }
+  }
+
+  // Validate zoom limits
+  if ( !isFinite( options.zoomMax ) || options.zoomMax <= 0 ) {
+    logger( 'buildHorizontalTimeline | Invalid zoomMax, using default' )
+    options.zoomMax = 315360000000000 // Default max zoom
+  }
+
+  if ( !isFinite( options.zoomMin ) || options.zoomMin <= 0 ) {
+    logger( 'buildHorizontalTimeline | Invalid zoomMin, using default' )
+    options.zoomMin = 10 // Default min zoom
+  }
+
+  // Ensure zoomMin is less than zoomMax
+  if ( options.zoomMin >= options.zoomMax ) {
+    logger( 'buildHorizontalTimeline | zoomMin is not less than zoomMax, adjusting' )
+    options.zoomMax = options.zoomMin * 1000
+  }
+
+  logger( 'buildHorizontalTimeline | Final timeline options', { 
+    start: options.start, 
+    end: options.end, 
+    min: options.min, 
+    max: options.max,
+    zoomMin: options.zoomMin,
+    zoomMax: options.zoomMax,
+    itemCount: items.length,
+    groupCount: groups.length
+  })
+
+  // Debug: Log all items being passed to timeline
+  const timelineItems = items.get()
+  logger( 'buildHorizontalTimeline | All timeline items', timelineItems )
+  
+  // Check for problematic items
+  const problematicItems = timelineItems.filter( item => {
+    const startInvalid = !item.start || isNaN( item.start.getTime())
+    const endInvalid = item.end && isNaN( item.end.getTime())
+    const endBeforeStart = item.end && item.start && item.end <= item.start
+    return startInvalid || endInvalid || endBeforeStart
+  })
+  
+  if ( problematicItems.length > 0 ) {
+    console.warn( 'buildHorizontalTimeline | Found problematic items:', problematicItems )
+  }
+
   timelineDiv.setAttribute( 'class', 'timeline-vis' )
-  const timeline = new Timeline( timelineDiv, items, groups, options )
+  
+  let timeline: Timeline
+  try {
+    timeline = new Timeline( timelineDiv, items, groups, options )
+    logger( 'buildHorizontalTimeline | Timeline created successfully' )
+  } catch ( error ) {
+    console.error( 'buildHorizontalTimeline | Error creating timeline:', error )
+    console.error( 'buildHorizontalTimeline | Timeline data:', { 
+      itemsArray: items.get(),
+      groupsArray: groups,
+      options 
+    })
+    
+    // Create a minimal timeline with safe defaults and no items
+    const safeOptions = {
+      start: new Date( 2020, 0, 1 ),
+      end: new Date( 2025, 0, 1 ),
+      min: new Date( 2000, 0, 1 ),
+      max: new Date( 2030, 0, 1 ),
+      zoomMin: 10,
+      zoomMax: 315360000000000,
+      showCurrentTime: false,
+      showTooltips: false,
+      minHeight: 200
+    }
+    
+    const emptyItems = new DataSet<CombinedTimelineEventData>( [] )
+    const emptyGroups: MinimalGroup[] = [{ id: 0, content: 'No items to display', value: 0 }]
+    
+    try {
+      timeline = new Timeline( timelineDiv, emptyItems, emptyGroups, safeOptions )
+      logger( 'buildHorizontalTimeline | Created safe fallback timeline' )
+      
+      // Add a message to indicate the issue
+      const messageDiv = timelineDiv.createDiv({ cls: 'timeline-error-message' })
+      messageDiv.setText( 'Timeline could not be rendered due to data issues. Check console for details.' )
+      messageDiv.style.padding = '20px'
+      messageDiv.style.textAlign = 'center'
+      messageDiv.style.color = 'var(--text-muted)'
+      
+      return // Exit early since we created a fallback
+    } catch ( fallbackError ) {
+      console.error( 'buildHorizontalTimeline | Even fallback timeline failed:', fallbackError )
+      
+      // Last resort: just show an error message
+      timelineDiv.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-error);">Timeline rendering failed. Please check your timeline data and try again.</div>'
+      return
+    }
+  }
 
   const arrows = makeArrowsArray( items )
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const myArrows = new Arrow( timeline, arrows )
+
+  // Auto health check after timeline creation
+  setTimeout(() => {
+    try {
+      // Simple health check for infinite loop detection
+      const visInstance = (timelineDiv as any).timeline
+      if (visInstance) {
+        const items = visInstance.itemsData?.get()
+        const itemCount = items?.length || 0
+        
+        logger(`buildHorizontalTimeline | Timeline created successfully with ${itemCount} items`)
+        
+        // Check for problematic items
+        if (items) {
+          const problematicItems = items.filter((item: any) => {
+            const startInvalid = !item.start || isNaN(new Date(item.start).getTime())
+            const endInvalid = item.end && isNaN(new Date(item.end).getTime())
+            return startInvalid || endInvalid
+          })
+          
+          if (problematicItems.length > 0) {
+            console.warn(`⚠️ Timeline has ${problematicItems.length} items with invalid dates:`, problematicItems)
+          }
+        }
+      }
+    } catch (error) {
+      logger('buildHorizontalTimeline | Post-creation check failed:', error)
+    }
+  }, 500)
 
   // these are probably non-performant but it works so ¯\_(ツ)_/¯
   // dynamically add and remove a "special" class on hover

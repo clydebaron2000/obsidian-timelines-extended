@@ -11,7 +11,6 @@ import {
 } from './types'
 import {
   buildTimelineDate,
-  cleanDate,
   convertEntryToMilliseconds,
   createTagList,
   filterMdFiles,
@@ -21,6 +20,7 @@ import {
   getNumEventsInFile,
   isHTMLElementType,
   logger,
+  parseSimplifiedDate,
   setDefaultArgs,
   sortTimelineDates,
 } from './utils'
@@ -61,7 +61,8 @@ export class TimelineBlockProcessor {
 
       if ( tag.includes( 'Date' )) {
         // startDate, endDate, minDate, maxDate
-        const result = buildTimelineDate( value, parseInt( this.settings.maxDigits ))
+        const dateResult = parseSimplifiedDate( value, this.settings.dateParsingConfig, false, 'box' )
+        const result = buildTimelineDate( dateResult )
         this.args[tag] = result
         return
       }
@@ -183,12 +184,37 @@ export class TimelineBlockProcessor {
         }
 
         const imgUrl = getImgUrl( this.appVault, eventImg )
-        const maxDigits = parseInt( this.settings.maxDigits )
-        const cleanedStartDateObject = cleanDate( startDate, maxDigits, this.args.dateFormat )
-        const cleanedEndDateObject   = cleanDate( endDate, maxDigits, this.args.dateFormat )
+        const cleanedStartDateObject = parseSimplifiedDate( startDate, this.settings.dateParsingConfig, false, type )
+        
+        // Check if end date was explicitly provided or is just defaulting to start date
+        const hasExplicitEndDate = endDate !== startDate
+        const cleanedEndDateObject = hasExplicitEndDate 
+          ? parseSimplifiedDate( endDate, this.settings.dateParsingConfig, false, type )
+          : parseSimplifiedDate( startDate, this.settings.dateParsingConfig, true, type )
 
         if ( !cleanedStartDateObject || !cleanedEndDateObject ) {
           throw new Error( 'either the start or end date object is missing' )
+        }
+
+        // Ensure end date is after start date for timeline consistency
+        const startDateObj = buildTimelineDate( cleanedStartDateObject )
+        const endDateObj = buildTimelineDate( cleanedEndDateObject )
+        
+        if ( startDateObj && endDateObj && endDateObj <= startDateObj && type !== 'point' ) {
+          logger( 'block | End date is not after start date, adjusting', { startDate, endDate, type })
+          // For non-point events, ensure end date is at least 1 day after start date
+          const adjustedEndDate = new Date( startDateObj.getTime() + 24 * 60 * 60 * 1000 )
+          const adjustedEndDateString = `${adjustedEndDate.getFullYear()}-${(adjustedEndDate.getMonth() + 1).toString().padStart(2, '0')}-${adjustedEndDate.getDate().toString().padStart(2, '0')}`
+          const adjustedEndDateObject = parseSimplifiedDate( adjustedEndDateString, this.settings.dateParsingConfig, false, type )
+          if ( adjustedEndDateObject ) {
+            cleanedEndDateObject.normalizedDateString = adjustedEndDateObject.normalizedDateString
+            cleanedEndDateObject.cleanedDateString = adjustedEndDateObject.cleanedDateString
+            cleanedEndDateObject.readableDateString = adjustedEndDateObject.readableDateString
+            cleanedEndDateObject.year = adjustedEndDateObject.year
+            cleanedEndDateObject.month = adjustedEndDateObject.month
+            cleanedEndDateObject.day = adjustedEndDateObject.day
+            cleanedEndDateObject.hour = adjustedEndDateObject.hour
+          }
         }
 
         const { normalizedDateString: noteId } = cleanedStartDateObject
