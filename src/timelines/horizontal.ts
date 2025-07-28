@@ -3,6 +3,7 @@ import { DataInterface, DataSet } from 'vis-data'
 import { DataGroup, Timeline, TimelineGroupEditableOption, TimelineOptionsGroupHeightModeType } from 'vis-timeline/esnext'
 
 import { makeArrowsArray } from '.'
+import { calculateSmartViewport, validateViewport } from '../utils/smart-viewport'
 import {
   CardContainer,
   CombinedTimelineEventData,
@@ -224,13 +225,63 @@ export async function buildHorizontalTimeline(
     })
   })
 
-  // Configuration for the Timeline
-  const options = {
+  // Check if explicit start/end dates were provided in the code block
+  // We'll check if the dates are NOT the default dates from setDefaultArgs
+  const currentYear = new Date().getFullYear()
+  const isDefaultStartDate = args.startDate && 
+    args.startDate.getFullYear() >= currentYear - 60 && 
+    args.startDate.getFullYear() <= currentYear - 40
+  const isDefaultEndDate = args.endDate && 
+    args.endDate.getFullYear() >= currentYear + 40 && 
+    args.endDate.getFullYear() <= currentYear + 60
+
+  const shouldUseSmartViewport = isDefaultStartDate && isDefaultEndDate
+
+  let finalOptions = {
+    start: args.startDate,
     end: args.endDate,
     min: args.minDate,
+    max: args.maxDate
+  }
+
+  // Only use smart viewport if NO explicit start/end dates were specified
+  if (shouldUseSmartViewport) {
+    logger('buildHorizontalTimeline | No explicit start/end dates specified, using smart viewport with ±20% padding')
+    const allItems = items.get()
+    const smartViewport = calculateSmartViewport(allItems)
+    
+    if (smartViewport) {
+      const validatedViewport = validateViewport(smartViewport)
+      finalOptions = {
+        start: validatedViewport.start,
+        end: validatedViewport.end,
+        min: validatedViewport.min,
+        max: validatedViewport.max
+      }
+      logger('buildHorizontalTimeline | Applied smart viewport with ±20% padding', {
+        eventRange: {
+          earliest: allItems.length > 0 ? new Date(Math.min(...allItems.map(i => i.start?.getTime()).filter(Boolean))) : null,
+          latest: allItems.length > 0 ? new Date(Math.max(...allItems.map(i => (i.end || i.start)?.getTime()).filter(Boolean))) : null
+        },
+        smartViewport: validatedViewport
+      })
+    } else {
+      logger('buildHorizontalTimeline | Smart viewport calculation failed, using default dates')
+    }
+  } else {
+    logger('buildHorizontalTimeline | Explicit start/end dates provided, using specified dates', {
+      explicitStart: !isDefaultStartDate ? args.startDate : null,
+      explicitEnd: !isDefaultEndDate ? args.endDate : null
+    })
+  }
+
+  // Configuration for the Timeline
+  const options = {
+    end: finalOptions.end,
+    min: finalOptions.min,
     minHeight: args.divHeight,
-    max: args.maxDate,
-    start: args.startDate,
+    max: finalOptions.max,
+    start: finalOptions.start,
     zoomMax: args.zoomOutLimit,
     zoomMin: args.zoomInLimit,
 
