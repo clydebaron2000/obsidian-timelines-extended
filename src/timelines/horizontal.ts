@@ -3,7 +3,6 @@ import { DataInterface, DataSet } from 'vis-data'
 import { DataGroup, Timeline, TimelineGroupEditableOption, TimelineOptionsGroupHeightModeType } from 'vis-timeline/esnext'
 
 import { makeArrowsArray } from '.'
-import { calculateSmartViewport, validateViewport } from '../utils/smart-viewport'
 import {
   CardContainer,
   CombinedTimelineEventData,
@@ -235,8 +234,6 @@ export async function buildHorizontalTimeline(
     args.endDate.getFullYear() >= currentYear + 40 && 
     args.endDate.getFullYear() <= currentYear + 60
 
-  const shouldUseSmartViewport = isDefaultStartDate && isDefaultEndDate
-
   let finalOptions = {
     start: args.startDate,
     end: args.endDate,
@@ -244,36 +241,14 @@ export async function buildHorizontalTimeline(
     max: args.maxDate
   }
 
-  // Only use smart viewport if NO explicit start/end dates were specified
-  if (shouldUseSmartViewport) {
-    logger('buildHorizontalTimeline | No explicit start/end dates specified, using smart viewport with ±20% padding')
-    const allItems = items.get()
-    const smartViewport = calculateSmartViewport(allItems)
-    
-    if (smartViewport) {
-      const validatedViewport = validateViewport(smartViewport)
-      finalOptions = {
-        start: validatedViewport.start,
-        end: validatedViewport.end,
-        min: validatedViewport.min,
-        max: validatedViewport.max
-      }
-      logger('buildHorizontalTimeline | Applied smart viewport with ±20% padding', {
-        eventRange: {
-          earliest: allItems.length > 0 ? new Date(Math.min(...allItems.map(i => i.start?.getTime()).filter(Boolean))) : null,
-          latest: allItems.length > 0 ? new Date(Math.max(...allItems.map(i => (i.end || i.start)?.getTime()).filter(Boolean))) : null
-        },
-        smartViewport: validatedViewport
-      })
-    } else {
-      logger('buildHorizontalTimeline | Smart viewport calculation failed, using default dates')
-    }
-  } else {
-    logger('buildHorizontalTimeline | Explicit start/end dates provided, using specified dates', {
-      explicitStart: !isDefaultStartDate ? args.startDate : null,
-      explicitEnd: !isDefaultEndDate ? args.endDate : null
-    })
-  }
+  // Simple logging of what dates we're using
+  logger('buildHorizontalTimeline | Using timeline dates', {
+    start: finalOptions.start,
+    end: finalOptions.end,
+    min: finalOptions.min,
+    max: finalOptions.max,
+    usingDefaults: isDefaultStartDate && isDefaultEndDate
+  })
 
   // Configuration for the Timeline
   const options = {
